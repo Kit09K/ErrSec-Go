@@ -1,0 +1,195 @@
+{
+  "version": "1.0",
+  "methodology": "OWASP Risk Rating Methodology",
+  "reference": "https://owasp.org/www-community/OWASP_Risk_Rating_Methodology",
+  "description": "Risk classification rules for ErrSec. Likelihood=avg(8 factors)/8. TechnicalImpact=avg(4 factors)/4. Scale: <3=LOW, 3-6=MEDIUM, 6-9=HIGH. Matrix: Impact(HIGH)+L(H/M/L)=CRITICAL/HIGH/MEDIUM; Impact(MED)+H/M/L=HIGH/MEDIUM/LOW; Impact(LOW)+H/M/L=LOW/LOW/NOTE. CRITICAL|HIGH -> RiskHigh; MEDIUM|LOW|NOTE -> RiskLow.",
+  "rules": [
+    {
+      "id": "R-DB-001",
+      "category": "DB",
+      "description": "Database and SQL operations. Fail-open on DB errors can lead to authentication bypass, data corruption, and full data disclosure.",
+      "match_type": "package_prefix",
+      "patterns": [
+        "database/sql",
+        "gorm.io/gorm",
+        "github.com/jmoiron/sqlx",
+        "github.com/lib/pq",
+        "github.com/go-sql-driver/mysql",
+        "github.com/mattn/go-sqlite3",
+        "go.mongodb.org/mongo-driver",
+        "github.com/redis/go-redis",
+        "github.com/go-redis/redis",
+        "github.com/jackc/pgx",
+        "github.com/uptrace/bun"
+      ],
+      "owasp_factors": {
+        "threat_agent": {
+          "skill_level": 6,
+          "motive": 9,
+          "opportunity": 7,
+          "size": 6
+        },
+        "vulnerability": {
+          "ease_of_discovery": 7,
+          "ease_of_exploit": 7,
+          "awareness": 9,
+          "intrusion_detection": 8
+        },
+        "technical_impact": {
+          "loss_of_confidentiality": 9,
+          "loss_of_integrity": 7,
+          "loss_of_availability": 7,
+          "loss_of_accountability": 7
+        }
+      }
+    },
+    {
+      "id": "R-AUTH-001",
+      "category": "Auth",
+      "description": "Authentication and cryptographic operations. Fail-open on auth errors enables authentication bypass and privilege escalation.",
+      "match_type": "package_prefix",
+      "patterns": [
+        "crypto/",
+        "golang.org/x/crypto",
+        "github.com/golang-jwt/jwt",
+        "github.com/dgrijalva/jwt-go",
+        "github.com/lestrrat-go/jwx",
+        "github.com/markbates/goth",
+        "github.com/casbin/casbin",
+        "github.com/ory/",
+        "golang.org/x/oauth2",
+        "github.com/alexedwards/argon2id"
+      ],
+      "owasp_factors": {
+        "threat_agent": {
+          "skill_level": 6,
+          "motive": 9,
+          "opportunity": 7,
+          "size": 9
+        },
+        "vulnerability": {
+          "ease_of_discovery": 9,
+          "ease_of_exploit": 9,
+          "awareness": 9,
+          "intrusion_detection": 9
+        },
+        "technical_impact": {
+          "loss_of_confidentiality": 9,
+          "loss_of_integrity": 9,
+          "loss_of_availability": 7,
+          "loss_of_accountability": 9
+        }
+      }
+    },
+    {
+      "id": "R-NET-001",
+      "category": "Network",
+      "description": "Network I/O operations. Fail-open on network errors can cause service disruption, data interception, and availability loss.",
+      "match_type": "package_prefix",
+      "patterns": [
+        "net/",
+        "net/http",
+        "net/rpc",
+        "net/smtp",
+        "github.com/gorilla/",
+        "github.com/gin-gonic/gin",
+        "github.com/labstack/echo",
+        "github.com/go-chi/chi",
+        "google.golang.org/grpc",
+        "google.golang.org/protobuf",
+        "github.com/valyala/fasthttp",
+        "golang.org/x/net"
+      ],
+      "owasp_factors": {
+        "threat_agent": {
+          "skill_level": 6,
+          "motive": 4,
+          "opportunity": 7,
+          "size": 9
+        },
+        "vulnerability": {
+          "ease_of_discovery": 7,
+          "ease_of_exploit": 5,
+          "awareness": 6,
+          "intrusion_detection": 8
+        },
+        "technical_impact": {
+          "loss_of_confidentiality": 6,
+          "loss_of_integrity": 5,
+          "loss_of_availability": 9,
+          "loss_of_accountability": 7
+        }
+      }
+    },
+    {
+      "id": "R-DISPLAY-001",
+      "category": "Display",
+      "description": "Display and template rendering operations. Fail-open on display errors has low security impact; typically cosmetic issues.",
+      "match_type": "package_prefix",
+      "patterns": [
+        "fmt",
+        "html/template",
+        "text/template",
+        "github.com/flosch/pongo2",
+        "github.com/CloudyKit/jet",
+        "github.com/aymerick/raymond"
+      ],
+      "owasp_factors": {
+        "threat_agent": {
+          "skill_level": 3,
+          "motive": 1,
+          "opportunity": 9,
+          "size": 9
+        },
+        "vulnerability": {
+          "ease_of_discovery": 9,
+          "ease_of_exploit": 1,
+          "awareness": 6,
+          "intrusion_detection": 8
+        },
+        "technical_impact": {
+          "loss_of_confidentiality": 2,
+          "loss_of_integrity": 1,
+          "loss_of_availability": 1,
+          "loss_of_accountability": 1
+        }
+      }
+    },
+    {
+      "id": "R-LOG-001",
+      "category": "Logging",
+      "description": "Logging and observability operations. Fail-open on logging errors has minimal direct security impact but reduces auditability.",
+      "match_type": "package_prefix",
+      "patterns": [
+        "log",
+        "log/slog",
+        "github.com/sirupsen/logrus",
+        "go.uber.org/zap",
+        "github.com/rs/zerolog",
+        "github.com/inconshreveable/log15",
+        "github.com/apex/log",
+        "github.com/go-kit/log"
+      ],
+      "owasp_factors": {
+        "threat_agent": {
+          "skill_level": 3,
+          "motive": 1,
+          "opportunity": 9,
+          "size": 9
+        },
+        "vulnerability": {
+          "ease_of_discovery": 9,
+          "ease_of_exploit": 1,
+          "awareness": 4,
+          "intrusion_detection": 9
+        },
+        "technical_impact": {
+          "loss_of_confidentiality": 2,
+          "loss_of_integrity": 1,
+          "loss_of_availability": 1,
+          "loss_of_accountability": 1
+        }
+      }
+    }
+  ]
+}
