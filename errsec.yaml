@@ -1,0 +1,25 @@
+# errsec.yaml — ErrSec configuration file
+# Place this file at the root of your Go module.
+# All fields are optional; omit any section to use defaults.
+
+rules:
+  # Example: treat your internal database wrapper as HIGH risk
+  # - pkg: "github.com/myorg/mydb"
+  #   func: ""          # match all functions in this package
+  #   risk: HIGH
+  #   reason: "Internal database wrapper — propagates sql errors"
+
+  # Example: treat audit log writes as LOW risk (best-effort)
+  # - pkg: "github.com/myorg/audit"
+  #   func: "Log"
+  #   risk: LOW
+  #   reason: "Audit log writes are best-effort; errors are acceptable"
+
+settings:
+  # branch_cap: maximum number of block visits per function before
+  # analysis is aborted. Increase for very large functions.
+  branch_cap: 1000
+
+  # min_risk: only report issues at or above this level.
+  # Values: LOW, MEDIUM, HIGH
+  min_risk: LOW
