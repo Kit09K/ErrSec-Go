@@ -84,7 +84,6 @@ Pre-configured categories (extensible via `rules/risk_rules.json`, NFR-08):
 ```bash
 git clone https://github.com/errsec/errsec
 cd errsec
-go get golang.org/x/tools@latest  
 go mod tidy
 go build ./cmd/errsec
 ```

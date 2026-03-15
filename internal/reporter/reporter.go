@@ -1,19 +1,5 @@
 // Package reporter converts []FlowFact into a human-readable Text Data-Flow Graph
 // written to stdout (FR-09).
-//
-// Output format for each finding:
-//
-//   ══════════════════════════════════════════════════════════
-//   [RISK: HIGH] fail-open site │ pattern: blank identifier
-//   Origin : database/sql
-//   Location: /path/to/file.go:42:8
-//   Function: (*sql.DB).QueryRow
-//   ──────────────────────────────────────────────────────────
-//   Flow path:
-//     [B0] t0 = db.QueryRow(...)  propagated   file.go:42
-//     [B2] t1 = t0.1 :error       propagated   file.go:42
-//     ...
-//   ══════════════════════════════════════════════════════════
 package reporter
 
 import (
@@ -30,15 +16,24 @@ const (
 )
 
 // Report writes the Text DFG report for all flow facts to w (FR-09).
-// Unanalyzable findings are reported separately at the end.
+// Facts with no valid source position (File == "") are silently skipped —
+// these are residual synthetic functions that slipped past the SSA filter.
 func Report(w io.Writer, facts []*models.FlowFact) {
-	if len(facts) == 0 {
+	// Filter out facts with no source position (safety net).
+	var valid []*models.FlowFact
+	for _, f := range facts {
+		if f.Site != nil && f.Site.File != "" && f.Site.Line > 0 {
+			valid = append(valid, f)
+		}
+	}
+
+	if len(valid) == 0 {
 		fmt.Fprintln(w, "ErrSec: no fail-open error-handling sites found.")
 		return
 	}
 
 	var normal, complex []*models.FlowFact
-	for _, f := range facts {
+	for _, f := range valid {
 		if f.TooComplex {
 			complex = append(complex, f)
 		} else {
@@ -47,7 +42,7 @@ func Report(w io.Writer, facts []*models.FlowFact) {
 	}
 
 	fmt.Fprintf(w, "\nErrSec — Data-Flow Graph Report\n")
-	fmt.Fprintf(w, "Sites found: %d  (unanalyzable: %d)\n\n", len(facts), len(complex))
+	fmt.Fprintf(w, "Sites found: %d  (unanalyzable: %d)\n\n", len(valid), len(complex))
 
 	for i, fact := range normal {
 		printFact(w, fact, i+1)
@@ -66,36 +61,32 @@ func Report(w io.Writer, facts []*models.FlowFact) {
 	}
 }
 
-// printFact formats one FlowFact as a Text DFG entry.
 func printFact(w io.Writer, fact *models.FlowFact, index int) {
 	s := fact.Site
 
 	fmt.Fprintf(w, "%s\n", doubleLine)
 	fmt.Fprintf(w, "[%d] RISK: %-4s │ pattern: %s\n", index, fact.Risk, s.Pattern)
 
-	// Origin
 	if s.SourcePkg != "" {
 		fmt.Fprintf(w, "  Origin  : %s\n", s.SourcePkg)
 	}
 
-	// Location
 	fmt.Fprintf(w, "  Location: %s:%d:%d\n", s.File, s.Line, s.Col)
 
-	// Function
 	if s.Func != nil {
 		fmt.Fprintf(w, "  Function: %s\n", s.Func.RelString(nil))
 	}
 
-	// Flow path
 	if len(fact.FlowPath) > 0 {
 		fmt.Fprintf(w, "%s\n", singleLine)
 		fmt.Fprintf(w, "  Flow path:\n")
 		for _, node := range fact.FlowPath {
-			instr := truncate(node.InstrText, 60)
-			loc := ""
-			if node.File != "" {
-				loc = fmt.Sprintf("  %s:%d", basename(node.File), node.Line)
+			// Skip flow nodes that also have no position (synthetic ops).
+			if node.File == "" {
+				continue
 			}
+			instr := truncate(node.InstrText, 60)
+			loc := fmt.Sprintf("  %s:%d", basename(node.File), node.Line)
 			fmt.Fprintf(w, "    [B%-3d] %-62s  %-12s%s\n",
 				node.BlockIndex, instr, node.Mutation, loc)
 		}
@@ -106,9 +97,9 @@ func printFact(w io.Writer, fact *models.FlowFact, index int) {
 	fmt.Fprintf(w, "%s\n\n", doubleLine)
 }
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
-
 func basename(path string) string {
+	// Handle both Unix and Windows separators.
+	path = strings.ReplaceAll(path, "\\", "/")
 	idx := strings.LastIndexByte(path, '/')
 	if idx < 0 {
 		return path

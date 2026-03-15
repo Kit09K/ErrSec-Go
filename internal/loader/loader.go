@@ -1,5 +1,5 @@
 // Package loader wraps go/packages to load Go source files and resolve dependencies.
-// It supports both single-file (.go) and multi-file package paths (FR-10).
+// Supports single-file (.go) and multi-file package paths (FR-10).
 package loader
 
 import (
@@ -16,6 +16,10 @@ type LoadedPackages struct {
 	Pkgs []*packages.Package
 }
 
+// loadMode requests everything SSA needs to build a complete program.
+// We do NOT request NeedDeps here for the Fset — dependencies are loaded
+// transitively by go/packages when their types are needed, but their
+// source ASTs are kept out of Fset so that position filtering works correctly.
 const loadMode = packages.NeedName |
 	packages.NeedFiles |
 	packages.NeedCompiledGoFiles |
@@ -29,21 +33,19 @@ const loadMode = packages.NeedName |
 // Load loads Go package(s) at the given path.
 //
 // path may be:
-//   - A directory path (e.g. "./cmd/server") → loaded as a package pattern.
-//   - A single .go file path (e.g. "./main.go") → loaded via file= query.
-//   - A Go import path (e.g. "github.com/foo/bar").
+//   - A directory path  (e.g. "./cmd/server")  → loaded as package pattern
+//   - A single .go file (e.g. "./main.go")     → loaded via file= query
+//   - A Go import path  (e.g. "github.com/foo/bar")
+//   - A recursive glob  (e.g. "./...")
 func Load(path string) (*LoadedPackages, error) {
 	fset := token.NewFileSet()
 	cfg := &packages.Config{
-		Mode: loadMode,
-		Fset: fset,
-		// Tests: false to skip test files
+		Mode:  loadMode,
+		Fset:  fset,
 		Tests: false,
 	}
 
-	// Determine query pattern
 	pattern := buildPattern(path)
-
 	pkgs, err := packages.Load(cfg, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("loader: packages.Load(%q): %w", pattern, err)
@@ -52,11 +54,14 @@ func Load(path string) (*LoadedPackages, error) {
 		return nil, fmt.Errorf("loader: no packages found at %q", path)
 	}
 
-	// Collect load errors
+	// Collect load errors (type errors are OK — analysis still proceeds).
 	var loadErrs []string
 	for _, pkg := range pkgs {
 		for _, e := range pkg.Errors {
-			loadErrs = append(loadErrs, e.Error())
+			// Only fatal errors (missing files, parse failures) block analysis.
+			if e.Kind == packages.ParseError || e.Kind == packages.ListError {
+				loadErrs = append(loadErrs, e.Error())
+			}
 		}
 	}
 	if len(loadErrs) > 0 {
@@ -72,10 +77,14 @@ func buildPattern(path string) string {
 	if strings.HasSuffix(path, ".go") {
 		return "file=" + path
 	}
-	// Directory that doesn't start with a module prefix
+	// Directory or relative path
 	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "/") || path == "." {
 		return path
 	}
-	// Otherwise treat as import path pattern
+	// Recursive glob
+	if strings.HasSuffix(path, "/...") || path == "..." {
+		return path
+	}
+	// Import path
 	return path
 }

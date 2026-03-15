@@ -1,6 +1,9 @@
-// Package pattern_matcher scans SSA instructions for the two fail-open error-handling patterns:
-//   1. err != nil check (PatternCheck) – FR-03
-//   2. blank identifier discarding an error return (PatternBlank) – FR-03
+// Package pattern_matcher scans SSA instructions for two fail-open error patterns:
+//   1. err != nil check  (PatternCheck) – FR-03
+//   2. blank identifier  (PatternBlank) – FR-03
+//
+// Scope note: this package only sees functions that AllFunctions() already
+// filtered to the user's target packages.  No stdlib / vendor guards are needed here.
 package pattern_matcher
 
 import (
@@ -12,6 +15,10 @@ import (
 )
 
 // FindPatterns scans fn for all ErrorSite instances matching either pattern.
+//
+// Important: *ssa.If (terminator) has Pos() == token.NoPos by design in go/ssa.
+// Position for a check site is taken from the *ssa.BinOp condition instead.
+// Do NOT guard on instr.Pos() here — it would silently drop all PatternCheck sites.
 func FindPatterns(fn *ssa.Function, fset *token.FileSet) []*models.ErrorSite {
 	if fn.Blocks == nil {
 		return nil
@@ -21,20 +28,23 @@ func FindPatterns(fn *ssa.Function, fset *token.FileSet) []*models.ErrorSite {
 
 	for _, block := range fn.Blocks {
 		for _, instr := range block.Instrs {
-			// ── Pattern 1: err != nil check ──────────────────────────────────
-			if ifInstr, ok := instr.(*ssa.If); ok {
-				if site := matchCheckPattern(fn, ifInstr, fset); site != nil {
+			switch v := instr.(type) {
+
+			// ── Pattern 1: err != nil check ──────────────────────────────
+			// *ssa.If.Pos() == token.NoPos (SSA design: terminators have no pos).
+			// Position is resolved from the BinOp condition operand.
+			case *ssa.If:
+				if site := matchCheckPattern(fn, v, fset); site != nil {
 					sites = append(sites, site)
 				}
-				continue
-			}
 
-			// ── Pattern 2: blank identifier (discarded error) ─────────────────
-			// A call whose result (or extracted tuple element) of error type has
-			// no referrers is treated as a blank-identifier discard.
-			if call, ok := instr.(ssa.CallInstruction); ok {
-				if site := matchBlankPattern(fn, call, fset); site != nil {
-					sites = append(sites, site)
+			// ── Pattern 2: blank identifier ───────────────────────────────
+			// ssa.CallInstruction.Pos() carries the call-expression position.
+			default:
+				if call, ok := instr.(ssa.CallInstruction); ok {
+					if site := matchBlankPattern(fn, call, fset); site != nil {
+						sites = append(sites, site)
+					}
 				}
 			}
 		}
@@ -43,10 +53,12 @@ func FindPatterns(fn *ssa.Function, fset *token.FileSet) []*models.ErrorSite {
 	return sites
 }
 
-// ─── Pattern 1 helpers ────────────────────────────────────────────────────────
+// ─── Pattern 1 ────────────────────────────────────────────────────────────────
 
-// matchCheckPattern returns an ErrorSite if ifInstr's condition is a comparison
-// of an error value to nil (err != nil  or  err == nil).
+// matchCheckPattern returns an ErrorSite when ifInstr's condition is a
+// comparison of an error value against nil (err != nil  or  err == nil).
+//
+// Source position is taken from binop.Pos() because *ssa.If has no own position.
 func matchCheckPattern(fn *ssa.Function, ifInstr *ssa.If, fset *token.FileSet) *models.ErrorSite {
 	binop, ok := ifInstr.Cond.(*ssa.BinOp)
 	if !ok {
@@ -66,7 +78,10 @@ func matchCheckPattern(fn *ssa.Function, ifInstr *ssa.If, fset *token.FileSet) *
 		return nil
 	}
 
-	pos := fset.Position(ifInstr.Pos())
+	// Use the BinOp's position — it corresponds to the "!=" or "==" token
+	// in the original source, which is exactly where the check occurs.
+	pos := fset.Position(binop.Pos())
+
 	return &models.ErrorSite{
 		Func:       fn,
 		Instr:      ifInstr,
@@ -74,17 +89,17 @@ func matchCheckPattern(fn *ssa.Function, ifInstr *ssa.If, fset *token.FileSet) *
 		ErrValue:   errVal,
 		SourceCall: findSourceCall(errVal),
 		SourcePkg:  sourcePackage(errVal),
-		Pos:        ifInstr.Pos(),
+		Pos:        binop.Pos(),
 		File:       pos.Filename,
 		Line:       pos.Line,
 		Col:        pos.Column,
 	}
 }
 
-// ─── Pattern 2 helpers ────────────────────────────────────────────────────────
+// ─── Pattern 2 ────────────────────────────────────────────────────────────────
 
-// matchBlankPattern returns an ErrorSite when call produces an error-typed value
-// that is never used (i.e. no referrers, equivalent to blank identifier).
+// matchBlankPattern returns an ErrorSite when call produces an error-typed
+// value that has no referrers (equivalent to blank-identifier assignment).
 func matchBlankPattern(fn *ssa.Function, call ssa.CallInstruction, fset *token.FileSet) *models.ErrorSite {
 	val := call.Value()
 	if val == nil {
@@ -95,12 +110,11 @@ func matchBlankPattern(fn *ssa.Function, call ssa.CallInstruction, fset *token.F
 
 	switch t := val.Type().(type) {
 	case *types.Tuple:
-		// Multi-return: look for an error-typed element whose Extract has no referrers.
+		// Multi-return: find the error-typed element whose Extract has no referrers.
 		for i := 0; i < t.Len(); i++ {
 			if isErrorType(t.At(i).Type()) {
 				ext := findExtract(val, i)
 				if ext == nil || len(*ext.Referrers()) == 0 {
-					// error element is discarded
 					if ext != nil {
 						discardedErr = ext
 					} else {
@@ -111,7 +125,6 @@ func matchBlankPattern(fn *ssa.Function, call ssa.CallInstruction, fset *token.F
 			}
 		}
 	default:
-		// Single return of error type with no referrers.
 		if isErrorType(val.Type()) && len(*val.Referrers()) == 0 {
 			discardedErr = val
 		}
@@ -136,9 +149,8 @@ func matchBlankPattern(fn *ssa.Function, call ssa.CallInstruction, fset *token.F
 	}
 }
 
-// ─── Utility ─────────────────────────────────────────────────────────────────
+// ─── Utilities ────────────────────────────────────────────────────────────────
 
-// isErrorType returns true if t is the built-in error interface.
 func isErrorType(t types.Type) bool {
 	iface, ok := t.Underlying().(*types.Interface)
 	if !ok {
@@ -152,22 +164,14 @@ func isErrorType(t types.Type) bool {
 		return false
 	}
 	sig, ok := m.Type().(*types.Signature)
-	if !ok {
-		return false
-	}
-	return sig.Params().Len() == 0 && sig.Results().Len() == 1
+	return ok && sig.Params().Len() == 0 && sig.Results().Len() == 1
 }
 
-// isNilConst returns true if v is a nil constant.
 func isNilConst(v ssa.Value) bool {
 	c, ok := v.(*ssa.Const)
-	if !ok {
-		return false
-	}
-	return c.IsNil()
+	return ok && c.IsNil()
 }
 
-// findExtract locates the *ssa.Extract instruction for element index i of tuple val.
 func findExtract(tuple ssa.Value, index int) *ssa.Extract {
 	refs := tuple.Referrers()
 	if refs == nil {
@@ -181,7 +185,6 @@ func findExtract(tuple ssa.Value, index int) *ssa.Extract {
 	return nil
 }
 
-// findSourceCall traces an error value back to its originating call instruction.
 func findSourceCall(v ssa.Value) ssa.CallInstruction {
 	switch x := v.(type) {
 	case ssa.CallInstruction:
@@ -194,7 +197,6 @@ func findSourceCall(v ssa.Value) ssa.CallInstruction {
 	return nil
 }
 
-// sourcePackage returns the import path of the package that owns the callee of v's source call.
 func sourcePackage(v ssa.Value) string {
 	call := findSourceCall(v)
 	if call == nil {
@@ -203,7 +205,6 @@ func sourcePackage(v ssa.Value) string {
 	return callPackage(call)
 }
 
-// callPackage returns the import path of the package owning the callee of call.
 func callPackage(call ssa.CallInstruction) string {
 	cc := call.Common()
 	if cc.IsInvoke() {

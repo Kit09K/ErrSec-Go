@@ -50,9 +50,26 @@ func (e *Engine) Analyze(site *models.ErrorSite) *models.FlowFact {
 	// ── Step 4: Forward DFA (FR-06) ─────────────────────────────────────────
 	startBlock := blockOf(site.Instr)
 	var flowPath []models.FlowNode
+
 	if startBlock != nil {
 		tracker := forward_tracker.New(cfg, e.fset, site.ErrValue)
-		flowPath = tracker.Track(startBlock)
+
+		switch site.Pattern {
+		case models.PatternCheck:
+			// For err != nil checks, use branch-aware tracking so that
+			// fall-through discards (no return/panic in error branch) and
+			// alloc-alias nil-stores (err = nil) are correctly classified.
+			ifInstr, ok := site.Instr.(*ssa.If)
+			if ok {
+				isNEQ := ifNEQ(ifInstr)
+				flowPath = tracker.TrackBranch(startBlock, ifInstr, isNEQ)
+			} else {
+				flowPath = tracker.Track(startBlock)
+			}
+
+		default:
+			flowPath = tracker.Track(startBlock)
+		}
 	}
 
 	result := &models.FlowFact{
@@ -65,6 +82,16 @@ func (e *Engine) Analyze(site *models.ErrorSite) *models.FlowFact {
 	e.recordSummary(site, result)
 
 	return result
+}
+
+// ifNEQ returns true when the If condition tests err != nil (NEQ),
+// false when it tests err == nil (EQL, less common pattern).
+func ifNEQ(ifInstr *ssa.If) bool {
+	binop, ok := ifInstr.Cond.(*ssa.BinOp)
+	if !ok {
+		return true // safe default
+	}
+	return binop.Op == token.NEQ
 }
 
 // recordSummary derives and persists a FunctionSummary from the DFA result.
